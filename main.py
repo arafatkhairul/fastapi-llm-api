@@ -25,9 +25,10 @@ load_dotenv()
 
 # ---- LLM ----
 LLM_API_URL   = os.getenv("LLM_API_URL", "https://llm.nodecel.cloud/v1/chat/completions")
-LLM_TIMEOUT   = float(os.getenv("LLM_TIMEOUT", "10.0"))     # slightly lower for snappier timeouts
-LLM_RETRIES   = int(os.getenv("LLM_RETRIES", "2"))
-log.info(f"Using self-hosted LLM at: {LLM_API_URL}")
+# === TIMEOUT FIX: Increased default timeout to 30 seconds for CPU-based LLM ===
+LLM_TIMEOUT   = float(os.getenv("LLM_TIMEOUT", "30.0"))
+LLM_RETRIES   = int(os.getenv("LLM_RETRIES", "1")) # Reduced retries for faster failure feedback
+log.info(f"Using self-hosted LLM at: {LLM_API_URL} with timeout: {LLM_TIMEOUT}s")
 
 # ---- Whisper ----
 WHISPER_MODEL   = os.getenv("WHISPER_MODEL", "tiny")
@@ -38,8 +39,7 @@ stt = WhisperModel(WHISPER_MODEL, device=WHISPER_DEVICE, compute_type=WHISPER_CO
 log.info("Whisper loaded with multilingual support.")
 
 # ---- TTS (gTTS ONLY) ----
-# Accent/voice flavor via Google TLD (e.g., com, co.uk, com.au, co.in, ie, co.za)
-TTS_TLD  = os.getenv("TTS_TLD", "com").strip()  # change this to tweak accent
+TTS_TLD  = os.getenv("TTS_TLD", "com").strip()
 TTS_SLOW = os.getenv("TTS_SLOW", "false").lower().strip() == "true"
 
 # ---- Memory store ----
@@ -60,14 +60,13 @@ SAMPLES_PER_FRAME = SR * FRAME_MS // 1000
 BYTES_PER_FRAME   = SAMPLES_PER_FRAME * 2
 
 VAD_AGGR              = int(os.getenv("VAD_AGGR", "3"))
-TRIGGER_VOICED_FRAMES = int(os.getenv("TRIGGER_VOICED_FRAMES", "2"))   # was 4 -> faster start
-END_SILENCE_MS        = int(os.getenv("END_SILENCE_MS", "450"))        # was 900 -> faster cut
-MAX_UTTER_MS          = int(os.getenv("MAX_UTTER_MS", "9000"))         # was 15000
+TRIGGER_VOICED_FRAMES = int(os.getenv("TRIGGER_VOICED_FRAMES", "2"))
+END_SILENCE_MS        = int(os.getenv("END_SILENCE_MS", "450"))
+MAX_UTTER_MS          = int(os.getenv("MAX_UTTER_MS", "9000"))
 
 MIN_UTTER_SEC = float(os.getenv("MIN_UTTER_SEC", "0.40"))
 MIN_RMS       = float(os.getenv("MIN_RMS", "0.008"))
 
-# Concurrency guards
 STT_SEM = asyncio.Semaphore(int(os.getenv("STT_CONCURRENCY", "1")))
 TTS_SEM = asyncio.Semaphore(int(os.getenv("TTS_CONCURRENCY", "1")))
 
@@ -102,7 +101,7 @@ LANGUAGES = {
     "en": {
         "name": "English",
         "assistant_name": ASSISTANT_NAME,
-        "intro_line": f'Hi — I\'m "{ASSISTANT_NAME}", developed by {ASSISTANT_AUTHOR}. What\'s your name?',
+        "intro_line": f'Hi — I\'m "{ASSISTANT_NAME}", developed by {ASSISTANT_AUTHOR} What\'s your name?',
         "shortcut_patterns": {
             "name": r"\b(what('?s| is)\s+your\s+name|who\s+are\s+you)\b",
             "destination": r"\b(where\s+did\s+i\s+(?:want|plan)\s+to\s+go)\b",
@@ -241,22 +240,15 @@ def _llm_request_sync(messages: List[Dict[str, str]]) -> str:
     payload = {"model": "llamacpp", "messages": messages, "max_tokens": 160, "temperature": 0.7}
 
     connect_to = max(2.0, min(5.0, LLM_TIMEOUT * 0.3))
-    backoff = 0.75
-    attempts = max(0, LLM_RETRIES) + 1
-
-    for attempt in range(1, attempts + 1):
-        try:
-            resp = requests.post(LLM_API_URL, headers=headers, json=payload, timeout=(connect_to, LLM_TIMEOUT))
-            resp.raise_for_status()
-            data = resp.json()
-            return (data.get("choices", [{}])[0].get("message", {}).get("content", "") or "").strip()
-        except requests.exceptions.RequestException as e:
-            log_exception(f"LLM API request (attempt {attempt}/{attempts})", e)
-            if attempt < attempts:
-                time.sleep(backoff)
-                backoff *= 1.6
-                continue
-            return ""  # final failure
+    
+    try:
+        resp = requests.post(LLM_API_URL, headers=headers, json=payload, timeout=(connect_to, LLM_TIMEOUT))
+        resp.raise_for_status()
+        data = resp.json()
+        return (data.get("choices", [{}])[0].get("message", {}).get("content", "") or "").strip()
+    except requests.exceptions.RequestException as e:
+        log_exception("LLM API request", e)
+        return ""
 
 def post_shorten(text: str, hard_limit: int = 240) -> str:
     t = (text or "").strip()
@@ -270,7 +262,7 @@ def post_shorten(text: str, hard_limit: int = 240) -> str:
         if len(out) >= 3: break
     return (" ".join(out).strip() if out else t[:hard_limit].rstrip()) + ("…" if len(t) > hard_limit else "")
 
-async def llm_reply(user_text: str, mem: SessionMemory, timeout: float = 10.0, retries: int = 2) -> str:
+async def llm_reply(user_text: str, mem: SessionMemory) -> str:
     p = (user_text or "").strip()
     if not p: return ""
     sc = shortcut_answer(p, mem)
@@ -288,12 +280,14 @@ async def llm_reply(user_text: str, mem: SessionMemory, timeout: float = 10.0, r
     messages_to_send = [{"role": "system", "content": system_prompt}] + mem.history
 
     last_err = None
-    for attempt in range(retries + 1):
+    for attempt in range(LLM_RETRIES + 1):
         try:
             loop = asyncio.get_event_loop()
-            txt = await asyncio.wait_for(loop.run_in_executor(None, _llm_request_sync, messages_to_send), timeout=timeout)
+            # === TIMEOUT FIX: Increased asyncio timeout to be slightly more than the request timeout ===
+            txt = await asyncio.wait_for(loop.run_in_executor(None, _llm_request_sync, messages_to_send), timeout=LLM_TIMEOUT + 2.0)
             if txt: return post_shorten(txt)
             last_err = "empty"
+            if attempt < LLM_RETRIES: await asyncio.sleep(0.75 * (attempt + 1))
         except asyncio.TimeoutError as e:
             last_err = e
         except Exception as e:
@@ -307,7 +301,6 @@ async def llm_reply(user_text: str, mem: SessionMemory, timeout: float = 10.0, r
 def tts_gtts_bytes(text: str, language: str = "en") -> bytes:
     fp = io.BytesIO()
     lang = {"en": "en", "it": "it"}.get(language, "en")
-    # Different accent via tld; speed via slow=False/True
     gTTS(text=text, lang=lang, tld=TTS_TLD, slow=TTS_SLOW).write_to_fp(fp)
     fp.seek(0)
     return fp.read()
@@ -369,7 +362,6 @@ async def ws_endpoint(ws: WebSocket):
     server_tts_enabled = True
     mem_store: Optional[MemoryStore] = None
 
-    # intro
     try:
         intro_text = LANGUAGES[mem.language]["intro_line"]
         await send_json(ws, {"type": "ai_text", "text": intro_text})
@@ -390,7 +382,6 @@ async def ws_endpoint(ws: WebSocket):
         while True:
             msg = await ws.receive()
 
-            # ---------- Text control ----------
             if msg["type"] == "websocket.receive" and msg.get("text") is not None:
                 try:
                     data = json.loads(msg["text"])
@@ -448,7 +439,6 @@ async def ws_endpoint(ws: WebSocket):
                     log_exception(f"[{conn_id}] text_parse", e)
                 continue
 
-            # ---------- Binary audio frames ----------
             if msg["type"] == "websocket.receive":
                 data = msg.get("bytes", None)
                 if data is None:
@@ -468,7 +458,6 @@ async def ws_endpoint(ws: WebSocket):
                             voiced_count += 1
                             if voiced_count >= TRIGGER_VOICED_FRAMES:
                                 triggered = True
-                                # ---- Barge-in: stop any current audio playback on client
                                 try:
                                     await send_json(ws, {"type": "stop_audio"})
                                 except Exception:
@@ -517,19 +506,16 @@ async def ws_endpoint(ws: WebSocket):
                                     log.info(f"[{conn_id}/{utt_id}] empty transcript")
                                     return
 
-                                # ---- instant transcript to UI (NO autocorrect) ----
                                 final_text = raw_text.strip()
                                 await send_json(ws, {"type": "final_transcript", "text": final_text})
 
-                                # Memory + history
                                 extract_memory_updates(final_text, mem)
                                 mem.add_history("user", final_text)
                                 if mem.client_id and mem_store:
                                     mem_store.save(mem)
 
-                                # ---- background LLM + TTS ----
                                 async def do_ai():
-                                    ai_text = await llm_reply(final_text, mem, timeout=LLM_TIMEOUT, retries=LLM_RETRIES)
+                                    ai_text = await llm_reply(final_text, mem)
                                     if not ai_text:
                                         return
                                     await send_json(ws, {"type": "ai_text", "text": ai_text})
@@ -544,7 +530,7 @@ async def ws_endpoint(ws: WebSocket):
                                             b64 = base64.b64encode(audio).decode("utf-8")
                                             await send_json(ws, {
                                                 "type": "ai_audio",
-                                                "id": str(uuid.uuid4()),   # client should stop previous and play this
+                                                "id": str(uuid.uuid4()),
                                                 "audio_base64": b64
                                             })
                                         except Exception as e:
