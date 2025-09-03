@@ -63,7 +63,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"], 
     allow_credentials=True,
-     allow_methods=["*"], allow_headers=["*"],
+    allow_methods=["*"], 
+    allow_headers=["*"],
 )
 
 # ===================== Audio / VAD =====================
@@ -218,175 +219,7 @@ LANGUAGES = {
 DEFAULT_LANGUAGE = os.getenv("DEFAULT_LANGUAGE", "en")
 
 # ===================== Database Manager =====================
-class RolePlayDatabase:
-    def __init__(self, db_path: pathlib.Path):
-        self.db_path = db_path
-        self.init_database()
-    
-    def init_database(self):
-        """Initialize database and create tables"""
-        try:
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-                
-                # Create role_play_configs table
-                cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS role_play_configs (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        client_id TEXT UNIQUE NOT NULL,
-                        role_play_enabled BOOLEAN DEFAULT FALSE,
-                        role_play_template TEXT DEFAULT 'school',
-                        organization_name TEXT DEFAULT '',
-                        organization_details TEXT DEFAULT '',
-                        role_title TEXT DEFAULT '',
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    )
-                """)
-                
-                # Create index for faster lookups
-                cursor.execute("""
-                    CREATE INDEX IF NOT EXISTS idx_client_id 
-                    ON role_play_configs(client_id)
-                """)
-                
-                conn.commit()
-                log.info("Database initialized successfully")
-                
-        except Exception as e:
-            log_exception("Database initialization", e)
-    
-    def save_role_play_config(self, client_id: str, config: Dict[str, Any]) -> bool:
-        """Save or update role play configuration"""
-        try:
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-                
-                # Check if config exists
-                cursor.execute("SELECT id FROM role_play_configs WHERE client_id = ?", (client_id,))
-                exists = cursor.fetchone()
-                
-                if exists:
-                    # Update existing config
-                    cursor.execute("""
-                        UPDATE role_play_configs 
-                        SET role_play_enabled = ?, role_play_template = ?, 
-                            organization_name = ?, organization_details = ?, role_title = ?,
-                            updated_at = CURRENT_TIMESTAMP
-                        WHERE client_id = ?
-                    """, (
-                        config.get('role_play_enabled', False),
-                        config.get('role_play_template', 'school'),
-                        config.get('organization_name', ''),
-                        config.get('organization_details', ''),
-                        config.get('role_title', ''),
-                        client_id
-                    ))
-                    log.info(f"Updated role play config for client: {client_id}")
-                else:
-                    # Insert new config
-                    cursor.execute("""
-                        INSERT INTO role_play_configs 
-                        (client_id, role_play_enabled, role_play_template, 
-                         organization_name, organization_details, role_title)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                    """, (
-                        client_id,
-                        config.get('role_play_enabled', False),
-                        config.get('role_play_template', 'school'),
-                        config.get('organization_name', ''),
-                        config.get('organization_details', ''),
-                        config.get('role_title', '')
-                    ))
-                    log.info(f"Created new role play config for client: {client_id}")
-                
-                conn.commit()
-                return True
-                
-        except Exception as e:
-            log_exception(f"Save role play config for {client_id}", e)
-            return False
-    
-    def get_role_play_config(self, client_id: str) -> Optional[Dict[str, Any]]:
-        """Get role play configuration for a client"""
-        try:
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-                
-                cursor.execute("""
-                    SELECT role_play_enabled, role_play_template, organization_name, 
-                           organization_details, role_title, updated_at
-                    FROM role_play_configs 
-                    WHERE client_id = ?
-                """, (client_id,))
-                
-                row = cursor.fetchone()
-                if row:
-                    return {
-                        'role_play_enabled': bool(row[0]),
-                        'role_play_template': row[1],
-                        'organization_name': row[2],
-                        'organization_details': row[3],
-                        'role_title': row[4],
-                        'updated_at': row[5]
-                    }
-                return None
-                
-        except Exception as e:
-            log_exception(f"Get role play config for {client_id}", e)
-            return None
-    
-    def clear_role_play_config(self, client_id: str) -> bool:
-        """Clear role play configuration for a client"""
-        try:
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-                
-                cursor.execute("""
-                    UPDATE role_play_configs 
-                    SET role_play_enabled = FALSE, organization_name = '', 
-                        organization_details = '', role_title = '',
-                        updated_at = CURRENT_TIMESTAMP
-                    WHERE client_id = ?
-                """, (client_id,))
-                
-                conn.commit()
-                log.info(f"Cleared role play config for client: {client_id}")
-                return True
-                
-        except Exception as e:
-            log_exception(f"Clear role play config for {client_id}", e)
-            return False
-    
-    def get_all_configs(self) -> List[Dict[str, Any]]:
-        """Get all role play configurations (for admin/debug)"""
-        try:
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-                
-                cursor.execute("""
-                    SELECT client_id, role_play_enabled, role_play_template, 
-                           organization_name, role_title, updated_at
-                    FROM role_play_configs 
-                    ORDER BY updated_at DESC
-                """)
-                
-                rows = cursor.fetchall()
-                return [
-                    {
-                        'client_id': row[0],
-                        'role_play_enabled': bool(row[1]),
-                        'role_play_template': row[2],
-                        'organization_name': row[3],
-                        'role_title': row[4],
-                        'updated_at': row[5]
-                    }
-                    for row in rows
-                ]
-                
-        except Exception as e:
-            log_exception("Get all configs", e)
-            return []
+from roleplay_database import RolePlayDatabase
 
 # Initialize database
 roleplay_db = RolePlayDatabase(DB_PATH)
@@ -715,12 +548,17 @@ async def llm_reply(user_text: str, mem: SessionMemory) -> str:
     lvl = LEVEL_STYLES.get(mem.level, LEVEL_STYLES["starter"])
     log.info(f"[LLM] Using level: {mem.level} | temp: {lvl['temperature']} | max_tokens: {lvl['max_tokens']}")
     
-    # Debug: Log current role play state
-    log.info(f"[LLM] Role play state: enabled={mem.role_play_enabled}, template={mem.role_play_template}, org={mem.organization_name}, role={mem.role_title}")
-
-    # Role play precedence - ALWAYS check database first for latest state
+    # Database-first approach: Check database first for role play answers
     if mem.client_id:
-        log.info(f"[LLM] Checking database for client: {mem.client_id}")
+        log.info(f"[LLM] Database-first approach for client: {mem.client_id}")
+        
+        # First, check if we have a stored answer for this question
+        stored_answer = roleplay_db.get_role_play_answer(mem.client_id, user_text)
+        if stored_answer:
+            log.info(f"[LLM] Found stored answer in database: {stored_answer['answer'][:100]}...")
+            return enforce_level_style(stored_answer['answer'], mem.level)
+        
+        # Check role play configuration
         db_config = roleplay_db.get_role_play_config(mem.client_id)
         log.info(f"[LLM] Database config: {db_config}")
         
@@ -732,16 +570,44 @@ async def llm_reply(user_text: str, mem: SessionMemory) -> str:
             mem.organization_details = db_config.get('organization_details', '')
             mem.role_title = db_config.get('role_title', '')
             
-            log.info(f"[LLM] Loaded role play data from DB: org='{mem.organization_name}', role='{mem.role_title}', enabled={mem.role_play_enabled}")
+            log.info(f"[LLM] Role play enabled: org='{mem.organization_name}', role='{mem.role_title}'")
             
             if mem.organization_name and mem.organization_details:
-                # Generate role play context
-                template = ROLE_PLAY_TEMPLATES.get(mem.role_play_template, ROLE_PLAY_TEMPLATES["custom"])
-                role_play_context = template["system_prompt"].format(
-                    organization_name=mem.organization_name,
-                    organization_details=mem.organization_details,
-                    role_title=mem.role_title or template["default_role"]
+                # Search for similar answers from same organization/role
+                similar_answers = roleplay_db.search_similar_answers(
+                    mem.client_id, user_text, mem.organization_name, mem.role_title
                 )
+                
+                if similar_answers:
+                    log.info(f"[LLM] Found {len(similar_answers)} similar answers, using as context")
+                    # Use similar answers as context for better response
+                    context_answers = "\n".join([
+                        f"Q: {ans['question']}\nA: {ans['answer']}" 
+                        for ans in similar_answers[:3]
+                    ])
+                    
+                    # Generate role play context with similar answers
+                    template = ROLE_PLAY_TEMPLATES.get(mem.role_play_template, ROLE_PLAY_TEMPLATES["custom"])
+                    role_play_context = f"""You are a {mem.role_title} at {mem.organization_name}. 
+
+Organization Details: {mem.organization_details}
+
+Previous similar questions and answers for context:
+{context_answers}
+
+Current question: {user_text}
+
+Please answer this question in character as a {mem.role_title} at {mem.organization_name}. Stay in character and provide relevant information based on your role and organization."""
+                else:
+                    # Generate standard role play context
+                    template = ROLE_PLAY_TEMPLATES.get(mem.role_play_template, ROLE_PLAY_TEMPLATES["custom"])
+                    role_play_context = template["system_prompt"].format(
+                        organization_name=mem.organization_name,
+                        organization_details=mem.organization_details,
+                        role_title=mem.role_title or template["default_role"]
+                    )
+                    role_play_context += f"\n\nUser Question: {user_text}"
+                
                 system_messages = [{"role":"system","content":role_play_context}]
                 log.info(f"[LLM] Role play context generated: {role_play_context[:100]}...")
             else:
@@ -754,12 +620,12 @@ async def llm_reply(user_text: str, mem: SessionMemory) -> str:
             mem.role_play_enabled = False
             persona = LANGUAGES[mem.language]["persona"]
             system_messages = [{"role":"system","content":persona}]
-            log.info(f"[LLM] Role play disabled/not found in DB, using standard persona: {persona[:100]}...")
+            log.info(f"[LLM] Role play disabled/not found in DB, using standard persona")
     else:
         # No client ID, use standard persona
         persona = LANGUAGES[mem.language]["persona"]
         system_messages = [{"role":"system","content":persona}]
-        log.info(f"[LLM] No client ID, using standard persona: {persona[:100]}...")
+        log.info(f"[LLM] No client ID, using standard persona")
 
     # Difficulty directive
     system_messages.append({"role":"system","content":lvl["prompt"]})
@@ -769,6 +635,18 @@ async def llm_reply(user_text: str, mem: SessionMemory) -> str:
     
     loop = asyncio.get_event_loop()
     txt = await loop.run_in_executor(None,_llm_request_sync,messages_to_send,mem.level)
+    
+    # Save the answer to database if role play is enabled
+    if mem.client_id and mem.role_play_enabled and mem.organization_name and txt:
+        try:
+            roleplay_db.save_role_play_answer(
+                mem.client_id, user_text, txt, 
+                mem.organization_name, mem.role_title, mem.role_play_template
+            )
+            log.info(f"[LLM] Saved answer to database for future use")
+        except Exception as e:
+            log_exception(f"[LLM] Save answer to database", e)
+    
     return txt or "Sorry, I didn't get that."
 
 # ===================== TTS (gTTS ONLY) =====================
@@ -1060,6 +938,72 @@ async def clear_roleplay_for_client(client_id: str):
             return JSONResponse({"error": "Failed to clear role play"}, status_code=500)
     except Exception as e:
         log_exception(f"clear_roleplay_for_client {client_id}", e)
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+@app.get("/roleplay/answers/{client_id}")
+async def get_roleplay_answers(client_id: str):
+    """Get all stored role play answers for a client"""
+    try:
+        answers = roleplay_db.get_all_answers_for_client(client_id)
+        return {
+            "client_id": client_id,
+            "total_answers": len(answers),
+            "answers": answers
+        }
+    except Exception as e:
+        log_exception(f"get_roleplay_answers for {client_id}", e)
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+@app.get("/roleplay/search/{client_id}")
+async def search_roleplay_answers(client_id: str, question: str = ""):
+    """Search for role play answers by question"""
+    try:
+        if not question:
+            return {"error": "Question parameter is required"}
+        
+        # Get client's role play config
+        config = roleplay_db.get_role_play_config(client_id)
+        if not config or not config.get('role_play_enabled'):
+            return {"error": "Role play not enabled for this client"}
+        
+        # Search for stored answer
+        stored_answer = roleplay_db.get_role_play_answer(client_id, question)
+        if stored_answer:
+            return {
+                "client_id": client_id,
+                "found": True,
+                "answer": stored_answer,
+                "source": "database"
+            }
+        
+        # Search for similar answers
+        similar_answers = roleplay_db.search_similar_answers(
+            client_id, question, 
+            config['organization_name'], config['role_title']
+        )
+        
+        return {
+            "client_id": client_id,
+            "found": False,
+            "similar_answers": similar_answers,
+            "source": "similar_search"
+        }
+        
+    except Exception as e:
+        log_exception(f"search_roleplay_answers for {client_id}", e)
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+@app.get("/roleplay/stats")
+async def get_roleplay_stats():
+    """Get role play database statistics"""
+    try:
+        stats = roleplay_db.get_database_stats()
+        return {
+            "database_stats": stats,
+            "status": "success"
+        }
+    except Exception as e:
+        log_exception("get_roleplay_stats", e)
         return JSONResponse({"error": str(e)}, status_code=500)
 
 # ===================== WebSocket =====================

@@ -5,9 +5,9 @@
   "traits": {},
   "language": "en",
   "level": "starter",
-  "role_play_enabled": true,
-  "role_play_template": "hospital",
-  "organization_name": "Apollo Hospital",
-  "organization_details": "Apollo Hospital – Short Details\n\nApollo Hospitals is one of the leading private healthcare chains in South Asia, originally founded in 1983 in Chennai, India. It has grown into a large network with hospitals, clinics, pharmacies, and diagnostic centers across India and in some international locations.\n\nKey Highlights\n\t•\tFounded: 1983 by Dr. Prathap C. Reddy.\n\t•\tHeadquarters: Chennai, India.\n\t•\tSpecialties: Cardiology, Oncology, Neurology, Orthopedics, Organ Transplants, Gastroenterology, Critical Care, and more.\n\t•\tFacilities: Advanced diagnostics, robotic surgery, telemedicine, and preventive health programs.\n\t•\tAccreditations: Many Apollo hospitals are accredited by NABH (India) and JCI (International).\n\t•\tPresence in Bangladesh: Apollo Hospitals Dhaka (now renamed Evercare Hospital Dhaka) was one of the most advanced tertiary care hospitals in Bangladesh.\n\nServices\n\t•\t24/7 Emergency & Trauma care.\n\t•\tInternational patient services.\n\t•\tMulti-specialty consultations.\n\t•\tModern diagnostic and imaging facilities.\n\t•\tComprehensive health check-up packages.\n\n👉 Would you like me to give you specific details about Apollo Hospital Dhaka (Bangladesh branch, now Evercare), or do you want the general Apollo Hospitals group overview worldwide?",
-  "role_title": "Nurse"
+  "role_play_enabled": false,
+  "role_play_template": "school",
+  "organization_name": "",
+  "organization_details": "",
+  "role_title": ""
 }
